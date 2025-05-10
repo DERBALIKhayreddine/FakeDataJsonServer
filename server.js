@@ -9,44 +9,56 @@ server.use(middlewares)
 // Custom route for OHLCV data with query parameters
 server.get('/api/ohlcv', (req, res) => {
   const { symbol, interval, start, end } = req.query
-  
+
+  // Validate query params
   if (!symbol || !interval || !start || !end) {
     return res.status(400).json({
       error: 'Missing required query parameters: symbol, interval, start, end'
     })
   }
 
+  // Parse dates safely
+  const startDate = new Date(start)
+  const endDate = new Date(end)
+  if (isNaN(startDate) || isNaN(endDate)) {
+    return res.status(400).json({
+      error: 'Invalid date format. Use ISO 8601 (e.g., 2021-01-01T00:00:00Z)'
+    })
+  }
+
+  // Access full db state
   const db = router.db.getState()
-  const ohlcvData = db.ohlcv.find(item => 
+
+  // Find matching OHLCV record
+  const matchingRecords = db.ohlcv.filter(item => 
     item.symbol === symbol && item.interval === interval
   )
 
-  if (!ohlcvData) {
+  if (matchingRecords.length === 0) {
     return res.status(404).json({
       error: 'No data found for the specified symbol and interval'
     })
   }
 
-  const filteredBars = ohlcvData.bars.filter(bar => {
+  // Filter bars within date range
+  const filteredBars = matchingRecords[0].bars.filter(bar => {
     const barDate = new Date(bar.timestamp)
-    const startDate = new Date(start)
-    const endDate = new Date(end)
     return barDate >= startDate && barDate <= endDate
   })
 
-  res.json({
+  return res.json({
     symbol,
     interval,
     bars: filteredBars
   })
 })
 
-// Use default router
-server.use(router)
+// Mount the default router *after* custom routes
+server.use('/api', router)
 
 // Start server
 const PORT = 3000
 server.listen(PORT, () => {
-  console.log(`JSON Server is running on port ${PORT}`)
-  console.log(`OHLCV endpoint: GET /api/ohlcv?symbol=AAPL&interval=1d&start=2021-01-01T00:00:00Z&end=2021-01-10T00:00:00Z`)
+  console.log(`✅ JSON Server is running on port ${PORT}`)
+  console.log(`📈 OHLCV endpoint: GET http://localhost:${PORT}/api/ohlcv?symbol=AAPL&interval=1d&start=2021-01-01T00:00:00Z&end=2021-01-10T00:00:00Z`)
 })
