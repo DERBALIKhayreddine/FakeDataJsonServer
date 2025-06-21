@@ -1,81 +1,119 @@
 const jsonServer = require('json-server');
 const fs = require('fs');
+const path = require('path');
 const server = jsonServer.create();
 const middlewares = jsonServer.defaults();
 
-// Load db.json and transform if necessary
+server.use(middlewares);
+
+// Load db.json
 let dbData;
 try {
-  dbData = JSON.parse(fs.readFileSync('db.json'));
+  const dbPath = path.join(__dirname, 'db.json');
+  dbData = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
 } catch (error) {
   console.error('❌ Error reading db.json:', error.message);
   process.exit(1);
 }
 
-// Ensure dbData is an object with an 'ohlcv' key
-const routerData = Array.isArray(dbData) ? { ohlcv: dbData } : dbData;
+// Helper to parse date safely
+const parseDate = (dateStr) => new Date(dateStr).getTime();
 
-// Initialize json-server router with transformed data
-const router = jsonServer.router(routerData);
+// ---- Custom API routes ---- //
 
-// Set default middlewares (logger, static, cors, and no-cache)
-server.use(middlewares);
-
-// Custom route for OHLCV data with query parameters
+// 1. OHLCV Endpoint
 server.get('/api/ohlcv', (req, res) => {
   const { symbol, interval, start, end } = req.query;
-
-  // Validate query params
-  if (!symbol || !interval || !start || !end) {
-    return res.status(400).json({
-      error: 'Missing required query parameters: symbol, interval, start, end',
-    });
-  }
-
-  // Parse dates safely
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  if (isNaN(startDate) || isNaN(endDate)) {
-    return res.status(400).json({
-      error: 'Invalid date format. Use ISO 8601 (e.g., 2021-01-01T00:00:00Z)',
-    });
-  }
-
-  // Access full db state
-  const db = router.db.getState();
-
-  // Find matching OHLCV record
-  const matchingRecords = db.ohlcv.filter(
-    (item) => item.symbol === symbol && item.interval === interval
+  const ohlcvEntry = dbData.ohlcv.find(
+    (entry) => entry.symbol === symbol && entry.interval === interval
   );
 
-  if (matchingRecords.length === 0) {
-    return res.status(404).json({
-      error: 'No data found for the specified symbol and interval',
-    });
+  if (!ohlcvEntry) {
+    return res.status(404).json({ error: 'OHLCV data not found' });
   }
 
-  // Filter bars within date range
-  const filteredBars = matchingRecords[0].bars.filter((bar) => {
-    const barDate = new Date(bar.timestamp);
-    return barDate >= startDate && barDate <= endDate;
+  let filteredData = ohlcvEntry.data;
+  if (start) {
+    const startDate = parseDate(start);
+    filteredData = filteredData.filter((d) => parseDate(d.date) >= startDate);
+  }
+  if (end) {
+    const endDate = parseDate(end);
+    filteredData = filteredData.filter((d) => parseDate(d.date) <= endDate);
+  }
+
+  res.json({ symbol, interval, data: filteredData });
+});
+
+// 2. Indicator Endpoint
+// 2. Indicator Endpoint (with indicator selection)
+server.get('/api/indicators', (req, res) => {
+  const { symbol, interval, indicators } = req.query;
+  const indicatorEntry = dbData.indicators.find(
+    (entry) => entry.symbol === symbol && entry.interval === interval
+  );
+
+  if (!indicatorEntry) {
+    return res.status(404).json({ error: 'Indicator data not found' });
+  }
+
+  let selectedIndicators = [];
+  if (indicators) {
+    selectedIndicators = indicators.split(',').map((i) => i.trim());
+  }
+
+  // Always include 'date' (and optionally 'close' for context)
+  const filteredData = indicatorEntry.indicators.map((item) => {
+    const result = { date: item.date };
+    if (!indicators) {
+      return item; // return all indicators if none specified
+    }
+
+    // Optionally include close price
+    if (item.close !== undefined) result.close = item.close;
+
+    selectedIndicators.forEach((key) => {
+      if (key in item) {
+        result[key] = item[key];
+      }
+    });
+
+    return result;
   });
 
-  return res.json({
+  res.json({
     symbol,
     interval,
-    bars: filteredBars,
+    data: filteredData,
   });
 });
 
-// Mount the default router *after* custom routes
-server.use('/api', router);
+// 3. Signals Endpoint
+server.get('/api/signals', (req, res) => {
+  const { symbol } = req.query;
+  const signalEntry = dbData.signals.find((entry) => entry.symbol === symbol);
+
+  if (!signalEntry) {
+    return res.status(404).json({ error: 'Signals not found' });
+  }
+
+  res.json(signalEntry);
+});
+
+// 4. Backtest Endpoint
+server.get('/api/backtest', (req, res) => {
+  const { symbol } = req.query;
+  const backtestEntry = dbData.backtest.find((entry) => entry.symbol === symbol);
+
+  if (!backtestEntry) {
+    return res.status(404).json({ error: 'Backtest data not found' });
+  }
+
+  res.json(backtestEntry);
+});
 
 // Start server
-const PORT = process.env.PORT || 3000; // Use Render's PORT env variable
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`✅ JSON Server is running on port ${PORT}`);
-  console.log(
-    `📈 OHLCV endpoint: GET http://localhost:${PORT}/api/ohlcv?symbol=AAPL&interval=1d&start=2021-01-01T00:00:00Z&end=2021-01-10T00:00:00Z`
-  );
+  console.log(`✅ Fake JSON API Server running on port ${PORT}`);
 });
